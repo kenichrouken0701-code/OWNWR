@@ -45,7 +45,7 @@ type RecordItem = {
   revenue: number;
 };
 
-const GAS_URL = "https://script.google.com/macros/s/AKfycbzRRz-rOW2ihaxOJWCwFc4wvDLbbjJFcsMSy327a7V100S1F9Ik-pgo6B5s4IfBIpF5rg/exec";
+const GAS_URL = "https://script.google.com/macros/s/AKfycbwjikjR7Fk-mrKGcQ6si9BV0Ix5NOPaTZYUPIOgY4QxKYyTVebS8_UX3qGWh4vnPdsiSQ/exec";
 
 const defaultSettings: Settings = {
   bases: ["すまえる", "地域創生"],
