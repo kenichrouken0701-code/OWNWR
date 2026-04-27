@@ -16,17 +16,20 @@ type Settings = {
   dailyWage: number;
 };
 
+type Monthly = {
+  month: string;
+  totalRevenue: number;
+  target: number;
+  achievementRate: number;
+  remaining: number;
+};
+
 type RecordItem = {
   date: string;
   base: string;
   name: string;
-  position: string;
-  payType: string;
   product: string;
-  count: number;
-  points: number;
-  attendance: boolean;
-  memo: string;
+  payType: string;
   revenue: number;
 };
 
@@ -47,11 +50,20 @@ const defaultSettings: Settings = {
   dailyWage: 158000 / 22,
 };
 
+const defaultMonthly: Monthly = {
+  month: "",
+  totalRevenue: 0,
+  target: 3500000,
+  achievementRate: 0,
+  remaining: 3500000,
+};
+
 const today = new Date().toISOString().slice(0, 10);
 
 export default function App() {
   const [members, setMembers] = useState<Member[]>([]);
   const [settings, setSettings] = useState<Settings>(defaultSettings);
+  const [monthly, setMonthly] = useState<Monthly>(defaultMonthly);
   const [records, setRecords] = useState<RecordItem[]>([]);
   const [saving, setSaving] = useState(false);
   const [message, setMessage] = useState("");
@@ -64,67 +76,35 @@ export default function App() {
     name: "",
     position: "",
     payType: "完全歩合",
-    product: "電気",
-    count: "",
-    points: "",
     attendance: false,
     memo: "",
+    electricCount: "",
+    gasCount: "",
+    internetCount: "",
+    waterCount: "",
+    points: "",
   });
 
+  const loadData = async () => {
+    try {
+      const res = await fetch(GAS_URL);
+      const data = await res.json();
+
+      if (data.success) {
+        setMembers(data.members || []);
+        setSettings(data.settings || defaultSettings);
+        setMonthly(data.monthly || defaultMonthly);
+      }
+    } catch {
+      setMessage("データ取得に失敗しました。GASを確認してください。");
+    } finally {
+      setLoading(false);
+    }
+  };
+
   useEffect(() => {
-    fetch(GAS_URL)
-      .then((res) => res.json())
-      .then((data) => {
-        if (data.success) {
-          setMembers(data.members || []);
-          setSettings(data.settings || defaultSettings);
-        }
-      })
-      .catch(() => {
-        setMessage("データ取得に失敗しました。GASを確認してください。");
-      })
-      .finally(() => setLoading(false));
+    loadData();
   }, []);
-
-  const productOptions = useMemo(() => {
-    if (form.base === "地域創生") return ["法人電気"];
-    return ["電気", "ガス", "回線", "ウォーター"];
-  }, [form.base]);
-
-  const previewRevenue = useMemo(() => {
-    const count = Number(form.count || 0);
-    const points = Number(form.points || 0);
-
-    let incentive = 0;
-
-    if (form.base === "すまえる") {
-      incentive = count * (settings.products[form.product] || 0);
-    }
-
-    if (form.base === "地域創生") {
-      incentive = points * settings.pointUnit;
-    }
-
-    let fixedPay = 0;
-
-    if (
-      form.attendance &&
-      (form.payType === "固定" || form.payType === "固定＋インセン")
-    ) {
-      fixedPay = settings.dailyWage;
-    }
-
-    if (form.payType === "完全歩合") {
-      fixedPay = 0;
-    }
-
-    return Math.round(incentive + fixedPay);
-  }, [form, settings]);
-
-  const totalRevenue = records.reduce((sum, r) => sum + r.revenue, 0);
-  const target = 3500000;
-  const achievement = Math.min((totalRevenue / target) * 100, 100);
-  const remaining = Math.max(target - totalRevenue, 0);
 
   const handleMemberChange = (id: string) => {
     const member = members.find((m) => m.id === id);
@@ -141,9 +121,94 @@ export default function App() {
     setForm((prev) => ({
       ...prev,
       base,
-      product: base === "地域創生" ? "法人電気" : "電気",
-      count: "",
+      electricCount: "",
+      gasCount: "",
+      internetCount: "",
+      waterCount: "",
       points: "",
+    }));
+  };
+
+  const incentiveRevenue = useMemo(() => {
+    if (form.base === "地域創生") {
+      return Number(form.points || 0) * settings.pointUnit;
+    }
+
+    const electric = Number(form.electricCount || 0) * (settings.products["電気"] || 0);
+    const gas = Number(form.gasCount || 0) * (settings.products["ガス"] || 0);
+    const internet = Number(form.internetCount || 0) * (settings.products["回線"] || 0);
+    const water = Number(form.waterCount || 0) * (settings.products["ウォーター"] || 0);
+
+    return electric + gas + internet + water;
+  }, [form, settings]);
+
+  const fixedRevenue = useMemo(() => {
+    if (
+      form.attendance &&
+      (form.payType === "固定" || form.payType === "固定＋インセン")
+    ) {
+      return settings.dailyWage;
+    }
+
+    return 0;
+  }, [form.attendance, form.payType, settings.dailyWage]);
+
+  const previewRevenue = Math.round(incentiveRevenue + fixedRevenue);
+
+  const liveTotalRevenue =
+    monthly.totalRevenue + records.reduce((sum, r) => sum + r.revenue, 0);
+
+  const target = monthly.target || 3500000;
+  const remaining = Math.max(target - liveTotalRevenue, 0);
+  const achievement = Math.min((liveTotalRevenue / target) * 100, 100);
+
+  const buildPayloads = () => {
+    const basePayload = {
+      date: form.date,
+      base: form.base,
+      name: form.name,
+      position: form.position,
+      payType: form.payType,
+      memo: form.memo,
+    };
+
+    if (form.base === "地域創生") {
+      return [
+        {
+          ...basePayload,
+          product: "法人電気",
+          count: 0,
+          points: Number(form.points || 0),
+          attendance: form.attendance,
+        },
+      ];
+    }
+
+    const products = [
+      { product: "電気", count: Number(form.electricCount || 0) },
+      { product: "ガス", count: Number(form.gasCount || 0) },
+      { product: "回線", count: Number(form.internetCount || 0) },
+      { product: "ウォーター", count: Number(form.waterCount || 0) },
+    ].filter((item) => item.count > 0);
+
+    if (products.length === 0 && form.attendance) {
+      return [
+        {
+          ...basePayload,
+          product: "出勤",
+          count: 0,
+          points: 0,
+          attendance: true,
+        },
+      ];
+    }
+
+    return products.map((item, index) => ({
+      ...basePayload,
+      product: item.product,
+      count: item.count,
+      points: 0,
+      attendance: index === 0 ? form.attendance : false,
     }));
   };
 
@@ -153,36 +218,36 @@ export default function App() {
       return;
     }
 
+    const payloads = buildPayloads();
+
+    if (payloads.length === 0) {
+      setMessage("件数・ポイント・出勤のどれかを入力してください。");
+      return;
+    }
+
     setSaving(true);
     setMessage("");
 
-    const payload = {
-      date: form.date,
-      base: form.base,
-      name: form.name,
-      position: form.position,
-      payType: form.payType,
-      product: form.product,
-      count: Number(form.count || 0),
-      points: Number(form.points || 0),
-      attendance: form.attendance,
-      memo: form.memo,
-    };
-
     try {
-      await fetch(GAS_URL, {
-        method: "POST",
-        mode: "no-cors",
-        headers: {
-          "Content-Type": "text/plain;charset=utf-8",
-        },
-        body: JSON.stringify(payload),
-      });
+      for (const payload of payloads) {
+        await fetch(GAS_URL, {
+          method: "POST",
+          mode: "no-cors",
+          headers: {
+            "Content-Type": "text/plain;charset=utf-8",
+          },
+          body: JSON.stringify(payload),
+        });
+      }
 
       setRecords((prev) => [
         ...prev,
         {
-          ...payload,
+          date: form.date,
+          base: form.base,
+          name: form.name,
+          product: form.base === "地域創生" ? "法人電気" : "複数商材",
+          payType: form.payType,
           revenue: previewRevenue,
         },
       ]);
@@ -191,12 +256,19 @@ export default function App() {
 
       setForm((prev) => ({
         ...prev,
-        count: "",
+        electricCount: "",
+        gasCount: "",
+        internetCount: "",
+        waterCount: "",
         points: "",
         attendance: false,
         memo: "",
       }));
-    } catch (error) {
+
+      setTimeout(() => {
+        loadData();
+      }, 1200);
+    } catch {
       setMessage("保存に失敗しました。GASのURLや権限を確認してください。");
     } finally {
       setSaving(false);
@@ -215,16 +287,17 @@ export default function App() {
               売上を入力して、独立基準までの距離を見える化
             </p>
           </div>
+
           <div className="rounded-full bg-blue-100 px-4 py-2 text-sm font-black text-blue-700">
-            目標：3,500,000円
+            {monthly.month || "今月"} / 目標：3,500,000円
           </div>
         </header>
 
         <section className="mb-8 grid grid-cols-1 gap-4 md:grid-cols-3">
           <div className="rounded-3xl border-l-8 border-blue-500 bg-white p-6 shadow-lg">
-            <p className="text-xs font-black text-slate-400">今回入力分売上</p>
+            <p className="text-xs font-black text-slate-400">今月売上合計</p>
             <h2 className="mt-2 text-3xl font-black text-slate-900">
-              ¥{totalRevenue.toLocaleString()}
+              ¥{liveTotalRevenue.toLocaleString()}
             </h2>
           </div>
 
@@ -311,37 +384,67 @@ export default function App() {
                   <option value="固定＋インセン">固定＋インセン</option>
                 </select>
               </Field>
+            </div>
 
-              <Field label="商材タイプ">
-                <select
-                  value={form.product}
-                  onChange={(e) =>
-                    setForm({ ...form, product: e.target.value })
-                  }
-                  className="input"
-                >
-                  {productOptions.map((product) => (
-                    <option key={product} value={product}>
-                      {product}
-                    </option>
-                  ))}
-                </select>
-              </Field>
+            {form.base === "すまえる" ? (
+              <div className="mt-6 rounded-3xl bg-slate-50 p-5">
+                <h3 className="mb-4 text-sm font-black text-slate-700">
+                  すまえる商材まとめ入力
+                </h3>
 
-              {form.base === "すまえる" ? (
-                <Field label="獲得件数">
-                  <input
-                    type="number"
-                    value={form.count}
-                    onChange={(e) =>
-                      setForm({ ...form, count: e.target.value })
-                    }
-                    placeholder="例：3"
-                    className="input"
-                  />
-                </Field>
-              ) : (
-                <Field label="獲得ポイント">
+                <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
+                  <Field label="電気 件数">
+                    <input
+                      type="number"
+                      value={form.electricCount}
+                      onChange={(e) =>
+                        setForm({ ...form, electricCount: e.target.value })
+                      }
+                      placeholder="例：3"
+                      className="input"
+                    />
+                  </Field>
+
+                  <Field label="ガス 件数">
+                    <input
+                      type="number"
+                      value={form.gasCount}
+                      onChange={(e) =>
+                        setForm({ ...form, gasCount: e.target.value })
+                      }
+                      placeholder="例：2"
+                      className="input"
+                    />
+                  </Field>
+
+                  <Field label="回線 件数">
+                    <input
+                      type="number"
+                      value={form.internetCount}
+                      onChange={(e) =>
+                        setForm({ ...form, internetCount: e.target.value })
+                      }
+                      placeholder="例：2"
+                      className="input"
+                    />
+                  </Field>
+
+                  <Field label="ウォーター 件数">
+                    <input
+                      type="number"
+                      value={form.waterCount}
+                      onChange={(e) =>
+                        setForm({ ...form, waterCount: e.target.value })
+                      }
+                      placeholder="例：1"
+                      className="input"
+                    />
+                  </Field>
+                </div>
+              </div>
+            ) : (
+              <div className="mt-6 rounded-3xl bg-slate-50 p-5">
+                <Field label="地域創生 獲得ポイント">
                   <input
                     type="number"
                     step="0.1"
@@ -353,21 +456,21 @@ export default function App() {
                     className="input"
                   />
                 </Field>
-              )}
-
-              <div className="flex items-end">
-                <label className="flex cursor-pointer items-center gap-3 rounded-2xl bg-slate-50 px-4 py-4 font-black text-slate-700">
-                  <input
-                    type="checkbox"
-                    checked={form.attendance}
-                    onChange={(e) =>
-                      setForm({ ...form, attendance: e.target.checked })
-                    }
-                    className="h-5 w-5"
-                  />
-                  当日の出勤あり
-                </label>
               </div>
+            )}
+
+            <div className="mt-5 flex items-end">
+              <label className="flex cursor-pointer items-center gap-3 rounded-2xl bg-slate-50 px-4 py-4 font-black text-slate-700">
+                <input
+                  type="checkbox"
+                  checked={form.attendance}
+                  onChange={(e) =>
+                    setForm({ ...form, attendance: e.target.checked })
+                  }
+                  className="h-5 w-5"
+                />
+                当日の出勤あり
+              </label>
             </div>
 
             <div className="mt-5">
